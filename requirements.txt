@@ -1,0 +1,6 @@
+boto3
+picamera
+time
+pyboto3
+ffmpeg-python
+hurry.filesize
