@@ -1,53 +1,65 @@
-from multiprocessing import Pool
-
-import botocore
-import picamera
-import boto3
-import traceback
+#!/usr/bin/env python
 import argparse
 import logging
+import traceback
 from logging.config import fileConfig
+
+import boto3
+import picamera
 from botocore.exceptions import ClientError
+
+from utils import check_arg_in_range, get_resolution, bytes_to_mb
 
 fileConfig('logging.ini')
 logger = logging.getLogger('pi_demo')
 
-# Gather input
+# Setup Program
 parser = argparse.ArgumentParser(
     description='Start a recording on your Pi and upload it to AWS S3',
-    usage='python record.py -o my_file_name -resolution 480'
-)
+    usage='python record.py -o my_file_name -resolution 480')
 parser.add_argument('-o', dest='outfile', type=str, required=True,
-                    help='the name for the resulting h.264 recording file',)
-parser.add_argument('-r', dest='resolution', type=str, choices=['360', '480','720','1080'],
-                    help='the resolution for your recording', default='480',)
-
+                    help='the name (without format suffix) for the resulting h.264 recording file', )
+parser.add_argument('-r', dest='resolution', type=str, choices=['360', '480', '720', '1080'],
+                    help='the resolution for your recording', default='480', )
+parser.add_argument('-s', dest='storage_handler', type=str, required=False, default='s3', choices=['s3'],
+                    help='the storage destination for the snap', )
+parser.add_argument('-q', dest='quality', type=int, default=25,
+                    help='the output quality where 40 is lowest and 1 is highest', )
+parser.add_argument('-l', dest='loop_length', type=int, default=10,
+                    help='the loop length to keep in memory. max is 60', )
+parser.add_argument('-br', dest='bitrate', type=int, default=17000000,
+                    help='the bitrate limit. max is 25000000', )
+parser.add_argument('-f', dest='framerate', type=int, default=24,
+                    help='the framerate for the recording', )
+# Gather input
 args = parser.parse_args()
-resolutions = {
-    '360': (480, 360),
-    '480': (640, 480),
-    '720': (1280, 720),
-    '1080': (1920, 1080),
-}
-resolution = resolutions[args.resolution]
+bitrate = args.bitrate
+quality = args.quality
+framerate = args.framerate
+loop_length = args.loop_length
+resolution = get_resolution(args.resolution)
 file_name = args.outfile
 
-# Setup AWS
+# Validate input
+check_arg_in_range(framerate, max=None, min=1)
+check_arg_in_range(bitrate, max=25000000, min=1)
+check_arg_in_range(quality, max=40, min=1)
+check_arg_in_range(loop_length, max=60)
+
+# Configure AWS
 s3 = boto3.client('s3')
 bucket = 'pi-demo-raw'
 key = 'h264/{FileName}.h264'.format(FileName=file_name)
-loop_length = 10
 min_part_size = 5
 
-def bytes_to_mb(b):
-    return b / (1024 ** 2)
 
 def find_first_header_frame(stream):
     for frame in stream.frames:
         if frame.frame_type == picamera.PiVideoFrameType.sps_header:
             return frame.position
 
-def upload_stream_to_s3(stream):
+
+def upload_to_s3(stream):
     # Find the first header frame in the video
     first_frame = find_first_header_frame(stream)
     stream.seek(first_frame)
@@ -57,13 +69,14 @@ def upload_stream_to_s3(stream):
     if stream_size > min_part_size:
         # Reset the stream to the first header
         stream.seek(first_frame)
-        upload_stream_to_s3_as_multipart(stream)
+        upload_as_multipart(stream)
     else:
         logger.info("Uploading to S3...")
         s3.put_object(Bucket=bucket, Key=key, Body=data)
     logger.info("Upload complete")
 
-def upload_stream_to_s3_as_multipart(stream):
+
+def upload_as_multipart(stream):
     parts = []
     multipart_upload = s3.create_multipart_upload(Bucket=bucket, Key=key)
     upload_id = multipart_upload["UploadId"]
@@ -95,7 +108,8 @@ def upload_stream_to_s3_as_multipart(stream):
         s3.complete_multipart_upload(Bucket=bucket, Key=key, UploadId=upload_id, MultipartUpload={
             'Parts': parts
         })
-        logger.info("Upload complete. Total parts: {Length}. {Bytes} bytes uploaded".format(Length=len(parts), Bytes=total_size))
+        logger.info("Upload complete. Total parts: {Length}. {Bytes} bytes uploaded".format(Length=len(parts),
+                                                                                            Bytes=total_size))
     except ClientError as e:
         # Abort the mpu if it fails
         s3.abort_multipart_upload(Bucket=bucket, Key=key, UploadId=upload_id)
@@ -103,15 +117,18 @@ def upload_stream_to_s3_as_multipart(stream):
         raise e
 
 
+storage_handler = {
+    's3': upload_to_s3
+}[args.storage_handler]
 # Init the camera
 with picamera.PiCamera() as camera:
-    # Create a stream that will be recycled every 30 secs
+    # Create a stream that will be recycled
     with picamera.PiCameraCircularIO(camera, seconds=loop_length) as stream:
         try:
             # Start Recording
             camera.resolution = resolution
-            camera.framerate = 24
-            camera.start_recording(stream, format='h264', quality=25, bitrate=750000)
+            camera.framerate = framerate
+            camera.start_recording(stream, format='h264', quality=quality, bitrate=bitrate)
             logger.info("Stream initiated. Use Ctrl + C to end stream")
             while True:
                 camera.wait_recording(loop_length)
@@ -119,7 +136,7 @@ with picamera.PiCamera() as camera:
             logger.info("Stream stopped by user")
             # Finish recording
             camera.stop_recording()
-            upload_stream_to_s3(stream)
+            storage_handler(stream)
         except Exception as e:
             logger.error(traceback.format_exc())
         finally:
