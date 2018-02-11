@@ -14,10 +14,12 @@ logger = logging.getLogger('pi_demo')
 
 # Gather input
 parser = argparse.ArgumentParser(
-    description='Take a snap on your Pi and upload it to AWS S3', usage='python record.py -resolution 480'
-)
+    description='Take a snap on your Pi and upload it to AWS S3',
+    usage='python snap.py -o my_file_name -resolution 480')
 parser.add_argument('-r', dest='resolution', type=str, choices=['360', '480', '720', '1080'],
                     help='the resolution for your snap', default='480', )
+parser.add_argument('-o', dest='outfile', type=str, required=True,
+                    help='the name for the resulting h.264 recording file',)
 
 args = parser.parse_args()
 resolutions = {
@@ -27,11 +29,12 @@ resolutions = {
     '1080': (1920, 1080),
 }
 resolution = resolutions[args.resolution]
+file_name = args.outfile
 
 # Setup AWS
 s3 = boto3.client('s3')
 bucket = 'pi-demo-raw'
-key = 'jpg/test.jpg'
+key = 'jpg/{FileName}.jpg'.format(FileName=file_name)
 loop_length = 10
 
 
