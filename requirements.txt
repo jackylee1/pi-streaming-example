@@ -3,4 +3,4 @@ picamera
 time
 pyboto3
 ffmpeg-python
-hurry.filesize
+AWSIoTPythonSDK

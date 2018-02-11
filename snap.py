@@ -38,6 +38,7 @@ file_name = args.outfile
 
 # Setup AWS
 s3 = boto3.client('s3')
+""":type: pyboto3.s3"""
 bucket = 'pi-demo-raw'
 key = 'jpg/{FileName}.jpg'.format(FileName=file_name)
 

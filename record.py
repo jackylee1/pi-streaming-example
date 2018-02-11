@@ -48,6 +48,7 @@ check_arg_in_range(loop_length, max=60)
 
 # Configure AWS
 s3 = boto3.client('s3')
+""":type: pyboto3.s3"""
 bucket = 'pi-demo-raw'
 key = 'h264/{FileName}.h264'.format(FileName=file_name)
 min_part_size = 5
